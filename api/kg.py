@@ -1,12 +1,5 @@
-"""Wraps the vendored W9B deterministic NL→Cypher mapper.
-
-The mapper itself is vendored under `w9b_mapper/` and must not be
-modified. This module provides the thin function the path operation
-calls.
-"""
 from .w9b_mapper.mapper import map_question
-from .w9b_mapper.errors import UnsupportedQueryError  # re-export
-
+from .w9b_mapper.errors import UnsupportedQueryError  # noqa: F401
 
 def wrap_kg_query(question: str):
     """Map a natural-language question to (cypher, params).
@@ -19,5 +12,4 @@ def wrap_kg_query(question: str):
         UnsupportedQueryError — if the question does not match any
         supported pattern. The path operation converts this to 422.
     """
-    # TODO: call `map_question(question)` and return its (cypher, params).
-    raise NotImplementedError
+    return map_question(question)

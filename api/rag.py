@@ -31,10 +31,19 @@ def assemble_prompt(question: str, chunks: list[dict]) -> Tuple[str, dict[int, d
 
     Returns (prompt_str, {citation_index: chunk_dict}).
     """
-    # TODO: walk the chunks list, build numbered source lines, and call
-    #       PROMPT_TEMPLATE.format(...). Return the prompt string and the
-    #       index→chunk mapping. Index starts at 1, not 0.
-    raise NotImplementedError
+    numbered = {}
+    sources_lines = []
+    
+    for i, chunk in enumerate(chunks, start=1):
+        numbered[i] = chunk
+        sources_lines.append(f"[{i}] {chunk['text']}")
+        
+    prompt = PROMPT_TEMPLATE.format(
+        sources="\n".join(sources_lines),
+        question=question
+    )
+    
+    return prompt, numbered
 
 
 def extract_citations(answer: str, numbered: dict[int, dict]) -> list[dict]:
@@ -44,10 +53,19 @@ def extract_citations(answer: str, numbered: dict[int, dict]) -> list[dict]:
     indices that are present in `numbered` are returned; duplicates are
     de-duplicated.
     """
-    # TODO: iterate CITATION_PATTERN.finditer(answer), look up each index
-    #       in `numbered`, and emit one {"chunk_id", "score"} dict per
-    #       unique index that maps to a real retrieved chunk.
-    raise NotImplementedError
+    citations = []
+    seen = set()
+    
+    for match in CITATION_PATTERN.finditer(answer):
+        idx = int(match.group(1))
+        if idx in numbered and idx not in seen:
+            seen.add(idx)
+            chunk = numbered[idx]
+            distance = chunk.get("_additional", {}).get("distance", 0.0)
+            score = max(0.0, min(1.0, 1.0 - float(distance)))
+            citations.append({"chunk_id": chunk["chunk_id"], "score": score})
+            
+    return citations
 
 
 def compose_rag(question: str, embedder, weaviate_client, generator, k: int = 4) -> dict:
@@ -63,15 +81,32 @@ def compose_rag(question: str, embedder, weaviate_client, generator, k: int = 4)
       confidence=0.0. (This is the "refuse rather than hallucinate"
       rule the autograder enforces.)
     """
-    # TODO:
-    # 1. Encode `question` with `embedder` and query Weaviate via
-    #    `with_near_vector` for top-k chunks (the Weaviate class is
-    #    `vectorizer=none`, so `with_near_text` would fail at runtime).
-    # 2. If retrieved == [], return the sentinel-shaped dict.
-    # 3. assemble_prompt(question, retrieved) → (prompt, numbered).
-    # 4. Run the generator with do_sample=False and max_new_tokens=256.
-    # 5. extract_citations(raw, numbered).
-    # 6. If no citations resolved → return the sentinel-shaped dict.
-    # 7. confidence = mean(citation scores), clipped to [0, 1].
-    # 8. Return {"answer": raw, "citations": citations, "confidence": confidence}.
-    raise NotImplementedError
+    vector = embedder.encode(question).tolist()
+    
+    response = (
+        weaviate_client.query
+        .get("Chunk", ["text", "chunk_id"])
+        .with_near_vector({"vector": vector})
+        .with_additional(["distance"])
+        .with_limit(k)
+        .do()
+    )
+    
+    chunks = response.get("data", {}).get("Get", {}).get("Chunk", [])
+    
+    if not chunks:
+        return {"answer": SENTINEL, "citations": [], "confidence": 0.0}
+        
+    prompt, numbered = assemble_prompt(question, chunks)
+    
+    out = generator(prompt, max_new_tokens=256, do_sample=False)
+    raw = out[0]["generated_text"] if isinstance(out, list) else str(out)
+    
+    citations = extract_citations(raw, numbered)
+    
+    if not citations:
+        return {"answer": SENTINEL, "citations": [], "confidence": 0.0}
+        
+    confidence = sum(c["score"] for c in citations) / len(citations)
+    
+    return {"answer": raw, "citations": citations, "confidence": float(confidence)}

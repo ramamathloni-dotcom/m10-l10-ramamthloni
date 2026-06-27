@@ -1,19 +1,43 @@
-import { useState } from "react";
+// web/pages/kg.tsx
 
-// TODO: import { KGResponse } from "../lib/types".
+import { useState } from "react";
+import { KGResponse } from "../lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function KgPage() {
   const [question, setQuestion] = useState("");
-  // TODO: track result + error state.
+  const [result, setResult] = useState<KGResponse | null>(null);
+  const [error, setError] = useState<{ message: string; patterns?: string[] } | null>(null);
 
   async function submit() {
-    // TODO:
-    // 1. POST to `${API_URL}/kg/query` with JSON body { question }.
-    // 2. Handle 422 (unsupported question) — surface the supported_patterns
-    //    list to the user from the response detail.
-    // 3. Render the cypher and table of rows.
+    setResult(null);
+    setError(null);
+    
+    try {
+      const res = await fetch(`${API_URL}/kg/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+      
+      if (!res.ok) {
+        const data = await res.json();
+        if (res.status === 422 && data.detail && data.detail.reason === "unsupported_question") {
+          setError({ message: "Unsupported question format.", patterns: data.detail.supported_patterns });
+        } else if (res.status === 503) {
+          setError({ message: "The backend is starting up — please try again in a moment." });
+        } else {
+          setError({ message: `Error: ${res.status}` });
+        }
+        return;
+      }
+      
+      const data: KGResponse = await res.json();
+      setResult(data);
+    } catch (err) {
+      setError({ message: "Could not reach the backend." });
+    }
   }
 
   return (
@@ -25,8 +49,42 @@ export default function KgPage() {
         placeholder="e.g. Find Sichuan recipes"
       />
       <button onClick={submit} disabled={!question}>Ask</button>
-      {/* TODO: render cypher in a <pre>, rows in a <table> with each
-                row having `data-testid="kg-row"`. */}
+      
+      {error && (
+        <div style={{ color: "red", marginTop: "1rem" }}>
+          <p>{error.message}</p>
+          {error.patterns && (
+            <ul>
+              {error.patterns.map((p, idx) => <li key={idx}>{p}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {result && (
+        <div style={{ marginTop: "1rem" }}>
+          <pre style={{ background: "#eee", padding: "1rem" }}>{result.cypher}</pre>
+          <p>Count: {result.count}</p>
+          <table border={1} style={{ borderCollapse: "collapse", width: "100%" }}>
+            <thead>
+              <tr>
+                {result.rows.length > 0 && Object.keys(result.rows[0]).map((key) => (
+                  <th key={key} style={{ padding: "8px" }}>{key}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {result.rows.map((row, idx) => (
+                <tr key={idx} data-testid="kg-row">
+                  {Object.values(row).map((val: any, jdx) => (
+                    <td key={jdx} style={{ padding: "8px" }}>{JSON.stringify(val)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </main>
   );
 }
